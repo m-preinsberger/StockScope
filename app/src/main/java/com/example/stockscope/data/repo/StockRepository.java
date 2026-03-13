@@ -38,6 +38,8 @@ import retrofit2.Response;
 
 public final class StockRepository {
 
+    private static final int SEARCH_RESULT_LIMIT = 8;
+
     private final FinnhubService finnhubService;
     private final AlphaVantageService alphaVantageService;
     private final StockDao stockDao;
@@ -78,13 +80,13 @@ public final class StockRepository {
                 continue;
             }
             suggestions.add(new SearchSuggestion(
-                    result.symbol.trim().toUpperCase(Locale.US),
+                    preferredTicker(result),
                     result.description == null || result.description.trim().isEmpty()
-                            ? result.symbol.trim().toUpperCase(Locale.US)
+                            ? preferredTicker(result)
                             : result.description.trim(),
                     result.type == null ? "" : result.type.trim()
             ));
-            if (suggestions.size() == 8) {
+            if (suggestions.size() == SEARCH_RESULT_LIMIT) {
                 break;
             }
         }
@@ -94,37 +96,31 @@ public final class StockRepository {
     public StockInsight analyze(String rawSymbol, String providedName) throws IOException {
         ensureFinnhubConfigured();
 
-        String symbol = rawSymbol.trim().toUpperCase(Locale.US);
-        Response<FinnhubQuote> quoteResponse = finnhubService.quote(symbol).execute();
-        if (!quoteResponse.isSuccessful() || quoteResponse.body() == null) {
-            throw new IOException("Unable to load the current quote for " + symbol + ".");
-        }
-
-        FinnhubQuote quote = quoteResponse.body();
-        List<FinnhubNewsItem> news = fetchNews(symbol);
-        AiRepository.TrendSnapshot trendSnapshot = fetchTrend(symbol);
-        String companyName = resolveCompanyName(symbol, providedName);
+        ResolvedSymbol resolvedSymbol = resolveSymbol(rawSymbol, providedName);
+        List<FinnhubNewsItem> news = fetchNews(resolvedSymbol.symbol);
+        AiRepository.TrendSnapshot trendSnapshot = fetchTrend(resolvedSymbol.symbol);
+        String companyName = resolveCompanyName(resolvedSymbol.symbol, resolvedSymbol.companyName);
         AiRepository.AiDecision decision = aiRepository.summarize(
-                symbol,
+                resolvedSymbol.symbol,
                 companyName,
-                quote,
+                resolvedSymbol.quote,
                 trendSnapshot,
                 news
         );
 
         ioExecutor.execute(() -> stockDao.upsertCachedQuote(new CachedQuoteEntity(
-                symbol,
-                quote.c,
-                quote.d,
-                quote.dp,
+                resolvedSymbol.symbol,
+                resolvedSymbol.quote.c,
+                resolvedSymbol.quote.d,
+                resolvedSymbol.quote.dp,
                 System.currentTimeMillis()
         )));
 
         return new StockInsight(
-                symbol,
+                resolvedSymbol.symbol,
                 companyName,
-                priceFormat.format(quote.c),
-                formatMovement(quote),
+                priceFormat.format(resolvedSymbol.quote.c),
+                formatMovement(resolvedSymbol.quote),
                 trendSnapshot.label,
                 decision.summary,
                 decision.rationale,
@@ -216,11 +212,129 @@ public final class StockRepository {
         }
     }
 
+    private ResolvedSymbol resolveSymbol(String rawInput, String providedName) throws IOException {
+        String query = rawInput == null ? "" : rawInput.trim();
+        if (query.isEmpty()) {
+            throw new IOException("Enter a stock symbol or company name.");
+        }
+
+        boolean tickerLike = looksLikeTicker(query);
+        List<SearchSuggestion> suggestions = tickerLike ? Collections.emptyList() : search(query);
+
+        List<SymbolCandidate> candidates = new ArrayList<>();
+        if (tickerLike) {
+            candidates.add(new SymbolCandidate(query.toUpperCase(Locale.US), providedName));
+        }
+        for (SearchSuggestion suggestion : suggestions) {
+            candidates.add(new SymbolCandidate(suggestion.symbol, suggestion.name));
+        }
+
+        if (tickerLike) {
+            try {
+                for (SearchSuggestion suggestion : search(query)) {
+                    candidates.add(new SymbolCandidate(suggestion.symbol, suggestion.name));
+                }
+            } catch (Exception ignored) {
+                // Keep the direct ticker attempt even when fallback search is unavailable.
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            throw new IOException("No quotable stock ticker was found for " + query + ".");
+        }
+
+        for (SymbolCandidate candidate : candidates) {
+            QuoteLookup quoteLookup = fetchQuote(candidate.symbol);
+            if (quoteLookup.quote != null) {
+                return new ResolvedSymbol(
+                        candidate.symbol,
+                        resolveCompanyName(candidate.symbol, candidate.companyName),
+                        quoteLookup.quote
+                );
+            }
+            if (quoteLookup.accessDenied) {
+                throw new IOException("This stock appears in search, but the current market-data access does not provide live quotes for " + candidate.symbol + ".");
+            }
+        }
+
+        throw new IOException("Unable to load the current quote for any match related to " + query + ".");
+    }
+
+    private QuoteLookup fetchQuote(String symbol) {
+        try {
+            Response<FinnhubQuote> quoteResponse = finnhubService.quote(symbol).execute();
+            if (!quoteResponse.isSuccessful() || quoteResponse.body() == null) {
+                return new QuoteLookup(null, responseShowsAccessDenied(quoteResponse));
+            }
+            FinnhubQuote quote = quoteResponse.body();
+            return new QuoteLookup(isValidQuote(quote) ? quote : null, false);
+        } catch (Exception ignored) {
+            return new QuoteLookup(null, false);
+        }
+    }
+
+    private boolean isValidQuote(FinnhubQuote quote) {
+        return quote != null && (quote.c > 0.0d || quote.pc > 0.0d || quote.t > 0L);
+    }
+
+    private boolean responseShowsAccessDenied(Response<?> response) {
+        try {
+            return response.errorBody() != null
+                    && response.errorBody().string().toLowerCase(Locale.US).contains("don't have access");
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private boolean looksLikeTicker(String input) {
+        return input.matches("[A-Za-z0-9.:-]{1,15}");
+    }
+
+    private String preferredTicker(FinnhubSearchResponse.Result result) {
+        String displaySymbol = result.displaySymbol == null ? "" : result.displaySymbol.trim();
+        if (!displaySymbol.isEmpty()) {
+            return displaySymbol.toUpperCase(Locale.US);
+        }
+        return result.symbol.trim().toUpperCase(Locale.US);
+    }
+
     private String resolveCompanyName(String symbol, String providedName) {
         if (providedName != null && !providedName.trim().isEmpty()) {
             return providedName.trim();
         }
         return symbol;
+    }
+
+    private static final class SymbolCandidate {
+        final String symbol;
+        final String companyName;
+
+        SymbolCandidate(String symbol, String companyName) {
+            this.symbol = symbol;
+            this.companyName = companyName;
+        }
+    }
+
+    private static final class ResolvedSymbol {
+        final String symbol;
+        final String companyName;
+        final FinnhubQuote quote;
+
+        ResolvedSymbol(String symbol, String companyName, FinnhubQuote quote) {
+            this.symbol = symbol;
+            this.companyName = companyName;
+            this.quote = quote;
+        }
+    }
+
+    private static final class QuoteLookup {
+        final FinnhubQuote quote;
+        final boolean accessDenied;
+
+        QuoteLookup(FinnhubQuote quote, boolean accessDenied) {
+            this.quote = quote;
+            this.accessDenied = accessDenied;
+        }
     }
 
     private String formatMovement(FinnhubQuote quote) {

@@ -1,5 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
+}
+
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        localFile.inputStream().use { load(it) }
+    }
+}
+
+fun localProperty(name: String): String {
+    return providers.gradleProperty(name).orNull ?: localProperties.getProperty(name, "")
 }
 
 android {
@@ -17,9 +30,9 @@ android {
     defaultConfig {
         minSdk=24
         targetSdk=35
-        buildConfigField("String", "FINNHUB_API_KEY", "\"${project.findProperty("FINNHUB_API_KEY") ?: ""}\"")
-        buildConfigField("String", "ALPHAVANTAGE_API_KEY", "\"${project.findProperty("ALPHAVANTAGE_API_KEY") ?: ""}\"")
-        buildConfigField("String", "GEMINI_API_KEY", "\"${project.findProperty("GEMINI_API_KEY") ?: ""}\"")
+        buildConfigField("String", "FINNHUB_API_KEY", "\"${localProperty("FINNHUB_API_KEY")}\"")
+        buildConfigField("String", "ALPHAVANTAGE_API_KEY", "\"${localProperty("ALPHAVANTAGE_API_KEY")}\"")
+        buildConfigField("String", "GEMINI_API_KEY", "\"${localProperty("GEMINI_API_KEY")}\"")
     }
 }
 
@@ -42,4 +55,3 @@ dependencies {
 
     implementation(libs.mpandroidchart)
 }
-

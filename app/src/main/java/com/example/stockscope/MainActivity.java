@@ -3,6 +3,8 @@ package com.example.stockscope;
 import android.os.Bundle;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.example.stockscope.databinding.ActivityMainBinding;
 import com.example.stockscope.ui.main.MainPagerAdapter;
@@ -19,6 +21,20 @@ public class MainActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
 
         setSupportActionBar(binding.toolbar);
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().setDisplayShowTitleEnabled(false);
+        }
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.appBar, (view, insets) -> {
+            int topInset = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top;
+            view.setPadding(
+                    view.getPaddingLeft(),
+                    topInset,
+                    view.getPaddingRight(),
+                    view.getPaddingBottom()
+            );
+            return insets;
+        });
 
         MainPagerAdapter adapter = new MainPagerAdapter(this);
         binding.viewPager.setAdapter(adapter);
