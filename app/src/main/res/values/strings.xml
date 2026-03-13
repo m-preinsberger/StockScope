@@ -1,3 +1,28 @@
 <resources>
     <string name="app_name">StockScope</string>
+    <string name="app_subtitle">News-led stock opinion</string>
+    <string name="analysis_tab">Analysis</string>
+    <string name="watchlist_tab">Watchlist</string>
+    <string name="hero_eyebrow">Live signal</string>
+    <string name="hero_title">Understand what the market is saying before you react.</string>
+    <string name="hero_body">Search a stock, read the latest company headlines, and review an AI-supported rise-or-fall opinion with a clear risk warning.</string>
+    <string name="query_hint">Enter stock symbol or company name</string>
+    <string name="search_button">Find stocks</string>
+    <string name="analyze_button">Analyze now</string>
+    <string name="enter_symbol_or_company">Enter a stock symbol or company name.</string>
+    <string name="empty_state">Analyze a stock to see current news, AI summary, and the app’s directional opinion.</string>
+    <string name="saved_to_watchlist">Saved to watchlist</string>
+    <string name="save_button">Save to watchlist</string>
+    <string name="ai_summary_label">AI SUMMARY</string>
+    <string name="fallback_summary_label">HEURISTIC SUMMARY</string>
+    <string name="opinion_rise">Opinion: Rise</string>
+    <string name="opinion_fall">Opinion: Fall</string>
+    <string name="opinion_watch">Opinion: Watch</string>
+    <string name="disclaimer_title">Trading risk warning</string>
+    <string name="disclaimer_body">StockScope does not cover trading risks, portfolio suitability, taxes, or execution risk. Every rise-or-fall signal in this app is only an opinion, not financial advice.</string>
+    <string name="news_title">Recent company news</string>
+    <string name="open_article">Open article</string>
+    <string name="open_label">Open</string>
+    <string name="remove_label">Remove</string>
+    <string name="watchlist_empty">Your watchlist is empty. Save a stock from the analysis tab to keep it here.</string>
 </resources>

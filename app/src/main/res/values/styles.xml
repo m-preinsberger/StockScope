@@ -1,3 +1,21 @@
 <resources>
-    <style name="Theme.Material3.DayNight.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar"/>
+    <style name="Widget.StockScope.TextInputLayout" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundColor">@color/white</item>
+        <item name="boxCornerRadiusTopStart">18dp</item>
+        <item name="boxCornerRadiusTopEnd">18dp</item>
+        <item name="boxCornerRadiusBottomEnd">18dp</item>
+        <item name="boxCornerRadiusBottomStart">18dp</item>
+    </style>
+
+    <style name="Widget.StockScope.PrimaryButton" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="backgroundTint">@color/surface_primary</item>
+        <item name="cornerRadius">18dp</item>
+    </style>
+
+    <style name="Widget.StockScope.SecondaryButton" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">18dp</item>
+        <item name="strokeColor">@color/card_stroke</item>
+    </style>
 </resources>

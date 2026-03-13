@@ -1,8 +1,12 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+<resources>
     <style name="Base.Theme.StockScope" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+        <item name="colorPrimary">@color/surface_primary</item>
+        <item name="colorPrimaryVariant">@color/surface_primary</item>
+        <item name="colorSecondary">@color/opinion_watch</item>
+        <item name="android:statusBarColor">@color/surface_primary</item>
+        <item name="android:navigationBarColor">@color/surface_canvas</item>
+        <item name="colorSurface">@color/white</item>
+        <item name="android:windowBackground">@color/surface_canvas</item>
     </style>
 
     <style name="Theme.StockScope" parent="Base.Theme.StockScope" />

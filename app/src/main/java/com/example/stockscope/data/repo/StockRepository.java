@@ -3,24 +3,30 @@ package com.example.stockscope.data.repo;
 import android.app.Application;
 
 import androidx.lifecycle.LiveData;
-import androidx.lifecycle.MutableLiveData;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
+import com.example.stockscope.BuildConfig;
 import com.example.stockscope.data.api.AlphaVantageService;
 import com.example.stockscope.data.api.ApiClient;
 import com.example.stockscope.data.api.FinnhubService;
+import com.example.stockscope.data.api.model.FinnhubNewsItem;
 import com.example.stockscope.data.api.model.FinnhubQuote;
 import com.example.stockscope.data.api.model.FinnhubSearchResponse;
 import com.example.stockscope.data.db.AppDatabase;
 import com.example.stockscope.data.db.CachedQuoteEntity;
 import com.example.stockscope.data.db.StockDao;
 import com.example.stockscope.data.db.WatchlistEntity;
-import com.example.stockscope.util.Resource;
+import com.example.stockscope.model.SearchSuggestion;
+import com.example.stockscope.model.StockInsight;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 
-import java.text.ParseException;
+import java.io.IOException;
+import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -28,138 +34,204 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import retrofit2.Call;
-import retrofit2.Callback;
 import retrofit2.Response;
 
 public final class StockRepository {
 
-    public static final class ChartData {
-        public final List<Float> prices;
-        public final List<String> labels;
-        public ChartData(List<Float> prices, List<String> labels) {
-            this.prices = prices; this.labels = labels;
-        }
+    private final FinnhubService finnhubService;
+    private final AlphaVantageService alphaVantageService;
+    private final StockDao stockDao;
+    private final AiRepository aiRepository;
+    private final ExecutorService ioExecutor = Executors.newSingleThreadExecutor();
+    private final DecimalFormat priceFormat = new DecimalFormat("$#,##0.00");
+    private final SimpleDateFormat apiDateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+
+    public StockRepository(Application application) {
+        this.finnhubService = ApiClient.finnhub(application.getCacheDir());
+        this.alphaVantageService = ApiClient.alphaVantage(application.getCacheDir());
+        this.stockDao = AppDatabase.get(application).stockDao();
+        this.aiRepository = new AiRepository(application.getCacheDir());
     }
 
-    private final FinnhubService finnhub;
-    private final AlphaVantageService alpha;
-    private final StockDao dao;
-    private final ExecutorService io = Executors.newFixedThreadPool(2);
-
-    public StockRepository(Application app) {
-        this.finnhub = ApiClient.finnhub(app.getCacheDir());
-        this.alpha = ApiClient.alphaVantage(app.getCacheDir());
-        this.dao = AppDatabase.get(app).stockDao();
+    public LiveData<List<WatchlistEntity>> watchlist() {
+        return stockDao.watchlist();
     }
-
-    public LiveData<List<WatchlistEntity>> watchlist() { return dao.watchlist(); }
-
-    public LiveData<CachedQuoteEntity> cachedQuoteLive(String symbol) { return dao.cachedQuoteLive(symbol); }
 
     public void addToWatchlist(String symbol, String name) {
-        io.execute(() -> dao.upsertWatchlist(new WatchlistEntity(symbol, name)));
+        ioExecutor.execute(() -> stockDao.upsertWatchlist(new WatchlistEntity(symbol, name)));
     }
 
     public void removeFromWatchlist(String symbol) {
-        io.execute(() -> dao.deleteWatchlist(symbol));
+        ioExecutor.execute(() -> stockDao.deleteWatchlist(symbol));
     }
 
-    public MutableLiveData<Resource<FinnhubSearchResponse>> search(String q) {
-        MutableLiveData<Resource<FinnhubSearchResponse>> live = new MutableLiveData<>();
-        live.setValue(Resource.loading(null));
-        finnhub.search(q).enqueue(new Callback<>() {
-            @Override public void onResponse(Call<FinnhubSearchResponse> call, Response<FinnhubSearchResponse> resp) {
-                if (resp.isSuccessful() && resp.body() != null) live.setValue(Resource.success(resp.body()));
-                else live.setValue(Resource.error("Search failed: " + resp.code(), null));
-            }
-            @Override public void onFailure(Call<FinnhubSearchResponse> call, Throwable t) {
-                live.setValue(Resource.error(t.getMessage() != null ? t.getMessage() : "Network error", null));
-            }
-        });
-        return live;
-    }
-
-    public MutableLiveData<Resource<FinnhubQuote>> refreshQuote(String symbol) {
-        MutableLiveData<Resource<FinnhubQuote>> live = new MutableLiveData<>();
-        live.setValue(Resource.loading(null));
-        finnhub.quote(symbol).enqueue(new Callback<>() {
-            @Override public void onResponse(Call<FinnhubQuote> call, Response<FinnhubQuote> resp) {
-                if (resp.isSuccessful() && resp.body() != null) {
-                    FinnhubQuote q = resp.body();
-                    live.setValue(Resource.success(q));
-                    io.execute(() -> dao.upsertCachedQuote(new CachedQuoteEntity(
-                            symbol, q.c, q.d, q.dp, System.currentTimeMillis()
-                    )));
-                } else {
-                    live.setValue(Resource.error("Quote failed: " + resp.code(), null));
-                }
-            }
-            @Override public void onFailure(Call<FinnhubQuote> call, Throwable t) {
-                live.setValue(Resource.error(t.getMessage() != null ? t.getMessage() : "Network error", null));
-            }
-        });
-        return live;
-    }
-
-    public MutableLiveData<Resource<ChartData>> loadDailyChart30(String symbol) {
-        MutableLiveData<Resource<ChartData>> live = new MutableLiveData<>();
-        live.setValue(Resource.loading(null));
-
-        // TIME_SERIES_DAILY_ADJUSTED is widely available; compact returns ~100 points.
-        alpha.dailyAdjusted("TIME_SERIES_DAILY_ADJUSTED", symbol, "compact").enqueue(new Callback<>() {
-            @Override public void onResponse(Call<JsonObject> call, Response<JsonObject> resp) {
-                if (!resp.isSuccessful() || resp.body() == null) {
-                    live.setValue(Resource.error("Chart failed: " + resp.code(), null));
-                    return;
-                }
-                try {
-                    ChartData cd = parseAlphaDaily(resp.body(), 30);
-                    live.setValue(Resource.success(cd));
-                } catch (Exception ex) {
-                    live.setValue(Resource.error("Parse error: " + ex.getMessage(), null));
-                }
-            }
-
-            @Override public void onFailure(Call<JsonObject> call, Throwable t) {
-                live.setValue(Resource.error(t.getMessage() != null ? t.getMessage() : "Network error", null));
-            }
-        });
-
-        return live;
-    }
-
-    private static ChartData parseAlphaDaily(JsonObject root, int maxPoints) throws ParseException {
-        JsonObject series = root.getAsJsonObject("Time Series (Daily)");
-        if (series == null) throw new IllegalStateException("Missing Time Series (Daily)");
-
-        // Alpha returns newest-to-oldest by JSON iteration order (not guaranteed). We sort by date.
-        SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
-        List<Date> dates = new ArrayList<>();
-        for (Map.Entry<String, JsonElement> e : series.entrySet()) dates.add(sdf.parse(e.getKey()));
-
-        dates.sort(Date::compareTo); // oldest -> newest
-
-        int start = Math.max(0, dates.size() - maxPoints);
-        List<Float> prices = new ArrayList<>();
-        List<String> labels = new ArrayList<>();
-
-        for (int i = start; i < dates.size(); i++) {
-            String key = sdf.format(dates.get(i));
-            JsonObject day = series.getAsJsonObject(key);
-            if (day == null) continue;
-            String closeStr = pick(day, "4. close", "5. adjusted close");
-            float close = Float.parseFloat(closeStr);
-            prices.add(close);
-            labels.add(key.substring(5)); // MM-dd
+    public List<SearchSuggestion> search(String query) throws IOException {
+        ensureFinnhubConfigured();
+        Response<FinnhubSearchResponse> response = finnhubService.search(query.trim()).execute();
+        if (!response.isSuccessful() || response.body() == null || response.body().result == null) {
+            throw new IOException("Stock search failed.");
         }
 
-        return new ChartData(prices, labels);
+        List<SearchSuggestion> suggestions = new ArrayList<>();
+        for (FinnhubSearchResponse.Result result : response.body().result) {
+            if (result == null || result.symbol == null || result.symbol.trim().isEmpty()) {
+                continue;
+            }
+            suggestions.add(new SearchSuggestion(
+                    result.symbol.trim().toUpperCase(Locale.US),
+                    result.description == null || result.description.trim().isEmpty()
+                            ? result.symbol.trim().toUpperCase(Locale.US)
+                            : result.description.trim(),
+                    result.type == null ? "" : result.type.trim()
+            ));
+            if (suggestions.size() == 8) {
+                break;
+            }
+        }
+        return suggestions;
     }
 
-    private static String pick(JsonObject obj, String a, String b) {
-        if (obj.has(b)) return obj.get(b).getAsString();
-        if (obj.has(a)) return obj.get(a).getAsString();
-        throw new IllegalStateException("Missing close field");
+    public StockInsight analyze(String rawSymbol, String providedName) throws IOException {
+        ensureFinnhubConfigured();
+
+        String symbol = rawSymbol.trim().toUpperCase(Locale.US);
+        Response<FinnhubQuote> quoteResponse = finnhubService.quote(symbol).execute();
+        if (!quoteResponse.isSuccessful() || quoteResponse.body() == null) {
+            throw new IOException("Unable to load the current quote for " + symbol + ".");
+        }
+
+        FinnhubQuote quote = quoteResponse.body();
+        List<FinnhubNewsItem> news = fetchNews(symbol);
+        AiRepository.TrendSnapshot trendSnapshot = fetchTrend(symbol);
+        String companyName = resolveCompanyName(symbol, providedName);
+        AiRepository.AiDecision decision = aiRepository.summarize(
+                symbol,
+                companyName,
+                quote,
+                trendSnapshot,
+                news
+        );
+
+        ioExecutor.execute(() -> stockDao.upsertCachedQuote(new CachedQuoteEntity(
+                symbol,
+                quote.c,
+                quote.d,
+                quote.dp,
+                System.currentTimeMillis()
+        )));
+
+        return new StockInsight(
+                symbol,
+                companyName,
+                priceFormat.format(quote.c),
+                formatMovement(quote),
+                trendSnapshot.label,
+                decision.summary,
+                decision.rationale,
+                decision.opinion,
+                decision.aiGenerated,
+                news
+        );
+    }
+
+    private List<FinnhubNewsItem> fetchNews(String symbol) {
+        try {
+            Calendar calendar = Calendar.getInstance();
+            Date today = calendar.getTime();
+            calendar.add(Calendar.DAY_OF_YEAR, -7);
+            Date from = calendar.getTime();
+            Response<List<FinnhubNewsItem>> response = finnhubService.companyNews(
+                    symbol,
+                    apiDateFormat.format(from),
+                    apiDateFormat.format(today)
+            ).execute();
+            if (!response.isSuccessful() || response.body() == null) {
+                return Collections.emptyList();
+            }
+            List<FinnhubNewsItem> items = new ArrayList<>(response.body());
+            items.sort(Comparator.comparingLong((FinnhubNewsItem item) -> item.datetime).reversed());
+            return items.size() > 10 ? new ArrayList<>(items.subList(0, 10)) : items;
+        } catch (Exception ignored) {
+            return Collections.emptyList();
+        }
+    }
+
+    private AiRepository.TrendSnapshot fetchTrend(String symbol) {
+        if (BuildConfig.ALPHAVANTAGE_API_KEY == null || BuildConfig.ALPHAVANTAGE_API_KEY.trim().isEmpty()) {
+            return new AiRepository.TrendSnapshot("30-day trend unavailable", 0.0d);
+        }
+
+        try {
+            Response<JsonObject> response = alphaVantageService
+                    .dailyAdjusted("TIME_SERIES_DAILY_ADJUSTED", symbol, "compact")
+                    .execute();
+
+            if (!response.isSuccessful() || response.body() == null) {
+                return new AiRepository.TrendSnapshot("30-day trend unavailable", 0.0d);
+            }
+
+            JsonObject series = response.body().getAsJsonObject("Time Series (Daily)");
+            if (series == null || series.entrySet().size() < 2) {
+                return new AiRepository.TrendSnapshot("30-day trend unavailable", 0.0d);
+            }
+
+            List<Map.Entry<String, JsonElement>> entries = new ArrayList<>(series.entrySet());
+            entries.sort(Map.Entry.comparingByKey());
+
+            int startIndex = Math.max(0, entries.size() - 30);
+            double first = readClose(entries.get(startIndex));
+            double last = readClose(entries.get(entries.size() - 1));
+            double percent = first == 0.0d ? 0.0d : ((last - first) / first) * 100.0d;
+
+            String label;
+            if (percent >= 5.0d) {
+                label = String.format(Locale.US, "Strongly up over 30 days (%.1f%%)", percent);
+            } else if (percent >= 1.5d) {
+                label = String.format(Locale.US, "Moderately up over 30 days (%.1f%%)", percent);
+            } else if (percent <= -5.0d) {
+                label = String.format(Locale.US, "Strongly down over 30 days (%.1f%%)", percent);
+            } else if (percent <= -1.5d) {
+                label = String.format(Locale.US, "Moderately down over 30 days (%.1f%%)", percent);
+            } else {
+                label = String.format(Locale.US, "Mostly flat over 30 days (%.1f%%)", percent);
+            }
+
+            return new AiRepository.TrendSnapshot(label, percent);
+        } catch (Exception ignored) {
+            return new AiRepository.TrendSnapshot("30-day trend unavailable", 0.0d);
+        }
+    }
+
+    private double readClose(Map.Entry<String, JsonElement> entry) {
+        JsonObject day = entry.getValue().getAsJsonObject();
+        if (day.has("5. adjusted close")) {
+            return day.get("5. adjusted close").getAsDouble();
+        }
+        return day.get("4. close").getAsDouble();
+    }
+
+    private void ensureFinnhubConfigured() throws IOException {
+        if (BuildConfig.FINNHUB_API_KEY == null || BuildConfig.FINNHUB_API_KEY.trim().isEmpty()) {
+            throw new IOException("Finnhub API key is missing. Add it to local.properties to enable quotes and news.");
+        }
+    }
+
+    private String resolveCompanyName(String symbol, String providedName) {
+        if (providedName != null && !providedName.trim().isEmpty()) {
+            return providedName.trim();
+        }
+        return symbol;
+    }
+
+    private String formatMovement(FinnhubQuote quote) {
+        String direction = quote.d >= 0 ? "+" : "";
+        return String.format(
+                Locale.US,
+                "%s%s today (%s%.2f%%)",
+                direction,
+                priceFormat.format(quote.d).replace("$-", "-$"),
+                quote.dp >= 0 ? "+" : "",
+                quote.dp
+        );
     }
 }

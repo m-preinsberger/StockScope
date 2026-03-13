@@ -2,11 +2,22 @@
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="24dp">
+    android:background="@color/surface_canvas">
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/watchlistRecycler"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:padding="16dp" />
 
     <TextView
-        android:layout_width="wrap_content"
+        android:id="@+id/emptyView"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Watchlist"
-        android:textSize="20sp"/>
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:padding="32dp"
+        android:text="@string/watchlist_empty"
+        android:textColor="@color/text_secondary"
+        android:textSize="16sp" />
 </FrameLayout>
